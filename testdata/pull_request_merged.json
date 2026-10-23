@@ -1,0 +1,14 @@
+{
+  "action": "closed",
+  "number": 7,
+  "pull_request": {
+    "number": 7,
+    "state": "closed",
+    "head": {"ref": "cents", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "merged": true,
+    "merge_commit_sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "changed_files": 150
+  },
+  "repository": {"id": 501, "full_name": "acme/app", "default_branch": "main"},
+  "installation": {"id": 9001}
+}

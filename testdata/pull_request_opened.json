@@ -1,0 +1,21 @@
+{
+  "action": "opened",
+  "number": 7,
+  "pull_request": {
+    "url": "https://api.github.com/repos/acme/app/pulls/7",
+    "id": 1001,
+    "number": 7,
+    "state": "open",
+    "title": "Bill in cents",
+    "user": {"login": "dev", "id": 42, "type": "User"},
+    "head": {"label": "acme:cents", "ref": "cents", "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "base": {"label": "acme:main", "ref": "main", "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    "merged": false,
+    "merge_commit_sha": null,
+    "changed_files": 150,
+    "draft": false
+  },
+  "repository": {"id": 501, "name": "app", "full_name": "acme/app", "private": true, "default_branch": "main"},
+  "installation": {"id": 9001, "node_id": "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uOTAwMQ=="},
+  "sender": {"login": "dev", "id": 42, "type": "User"}
+}
