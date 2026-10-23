@@ -22,3 +22,5 @@ mux.Handle("POST /github/core-events", adapter.CoreEvents()) // a core webhook f
 | core `changecheck.transitioned` | `ChangeCheckOf` | the new status and comment |
 
 A webhook that does not verify is 401 and calls nothing. A failure in core or at GitHub is 502, so GitHub marks the delivery failed and it can be redelivered: core's check is idempotent. The App needs read access to pull requests and write access to commit statuses and issues (comments). No secret is stored or logged.
+
+The comment and the status show addresses and states only (D152): the Check's address and verdict, each touched Area's address, approval mode and verdict, and the addresses of the Decisions in force. Anyone who can read the pull request reads the comment, and GitHub does not know the instance's read rules. Area names and Decision titles appear only for a repository listed in `Config.NamesShown`, for example a private repository whose readers are all members; the list is empty by default and is logged at start.

@@ -54,6 +54,14 @@ type Config struct {
 	// CheckURL, when set, builds the status's target link from a Check
 	// address, for example https://example.com/checks/%s.
 	CheckURL string
+	// NamesShown lists the repositories (owner/name) whose comment shows Area
+	// names and Decision titles (D152). Every other repository's comment
+	// shows addresses and states only: anyone who can read the pull request
+	// reads the comment, and the host does not know the instance's read
+	// rules. Turning a repository on is an administrative act, made in this
+	// configuration and recorded by its change history; New logs the list at
+	// start. Empty by default.
+	NamesShown []string
 }
 
 // Adapter turns GitHub webhook events into core's pull request check and
@@ -70,6 +78,8 @@ type Adapter struct {
 	// installs remembers each repository's installation, learnt from its
 	// webhooks, so a core event can be posted back.
 	installs map[string]int64
+	// names holds the repositories of Config.NamesShown, lower case.
+	names map[string]bool
 }
 
 // installationToken is a cached GitHub App installation token.
@@ -104,7 +114,22 @@ func New(cfg Config) (*Adapter, error) {
 	if cfg.StatusContext == "" {
 		cfg.StatusContext = "smeldr/check"
 	}
-	return &Adapter{cfg: cfg, key: key, now: time.Now, toks: map[int64]installationToken{}, installs: map[string]int64{}}, nil
+	names := map[string]bool{}
+	for _, repo := range cfg.NamesShown {
+		if repo = strings.ToLower(strings.TrimSpace(repo)); repo != "" {
+			names[repo] = true
+		}
+	}
+	if len(names) > 0 {
+		slog.Info("github: comments show Area names and Decision titles", "repositories", cfg.NamesShown)
+	}
+	return &Adapter{cfg: cfg, key: key, now: time.Now, toks: map[int64]installationToken{}, installs: map[string]int64{}, names: names}, nil
+}
+
+// namesShown reports whether repo's comment shows names and titles (D152).
+// GitHub repository names are not case sensitive.
+func (a *Adapter) namesShown(repo string) bool {
+	return a.names[strings.ToLower(repo)]
 }
 
 // parsePrivateKey reads an RSA key from PEM, PKCS#1 or PKCS#8.

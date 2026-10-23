@@ -158,6 +158,12 @@ type fixture struct {
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
+	return newFixtureNames(t, nil)
+}
+
+// newFixtureNames is newFixture with Config.NamesShown set.
+func newFixtureNames(t *testing.T, names []string) fixture {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +173,7 @@ func newFixture(t *testing.T) fixture {
 	srv := httptest.NewServer(f.gh.handler(t, &key.PublicKey))
 	t.Cleanup(srv.Close)
 	f.a, err = New(Config{Checker: f.core, Actor: smeldr.User{ID: "adapter"}, WebhookSecret: f.secret, CoreWebhookSecret: f.coreSec,
-		AppID: "123", PrivateKeyPEM: pemKey, APIBase: srv.URL + "/", CheckURL: "https://example.com/checks/%s"})
+		AppID: "123", PrivateKeyPEM: pemKey, APIBase: srv.URL + "/", CheckURL: "https://example.com/checks/%s", NamesShown: names})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +262,7 @@ func TestPullRequestOpened(t *testing.T) {
 		t.Errorf("status = %s", status)
 	}
 	comment := f.gh.bodies["POST /repos/acme/app/issues/7/comments"]
-	for _, want := range []string{"CHK3", "ARE1 Billing", "D7 Money in cents", "awaiting-approval"} {
+	for _, want := range []string{"CHK3", "| ARE1 |", "- D7", "awaiting-approval"} {
 		if !strings.Contains(comment, want) {
 			t.Errorf("comment is missing %q: %s", want, comment)
 		}
@@ -443,12 +449,12 @@ func TestStatusAndComment(t *testing.T) {
 	if state, desc := statusOf(none); state != "success" || !strings.Contains(desc, "No Area") {
 		t.Errorf("uncovered: %s %s", state, desc)
 	}
-	if body := commentBody(none); !strings.Contains(body, "touches nothing") {
+	if body := commentBody(none, false); !strings.Contains(body, "touches nothing") {
 		t.Errorf("uncovered comment: %s", body)
 	}
 	partly := awaiting()
 	partly.Check.CheckedPartly = true
-	if body := commentBody(partly); !strings.Contains(body, "checked partly") {
+	if body := commentBody(partly, false); !strings.Contains(body, "checked partly") {
 		t.Errorf("partly: %s", body)
 	}
 }
@@ -526,5 +532,48 @@ func TestInstallationLookup(t *testing.T) {
 	f.gh.fail = "/repos/acme/app/installation"
 	if _, err := f.a.installationOf(context.Background(), "acme/app"); err == nil {
 		t.Error("lookup error: no error")
+	}
+}
+
+// D152: addresses and states by default; names and titles only for a
+// repository in Config.NamesShown.
+func TestCommentNames(t *testing.T) {
+	res := awaiting()
+	body := commentBody(res, false)
+	for _, hidden := range []string{"Billing", "Money in cents"} {
+		if strings.Contains(body, hidden) {
+			t.Errorf("default comment shows %q: %s", hidden, body)
+		}
+	}
+	for _, shown := range []string{"CHK3", "ARE1", "requires-approval", "awaiting-approval", "- D7"} {
+		if !strings.Contains(body, shown) {
+			t.Errorf("default comment lacks %q: %s", shown, body)
+		}
+	}
+	if body := commentBody(res, true); !strings.Contains(body, "ARE1 Billing") || !strings.Contains(body, "D7 Money in cents") {
+		t.Errorf("names on: %s", body)
+	}
+	if state, desc := statusOf(res); state != "pending" || desc != "CHK3: awaiting approval" {
+		t.Errorf("status: %s %q", state, desc)
+	}
+
+	// Through the adapter: off by default.
+	f := newFixture(t)
+	if w := f.deliver(t, "pull_request", "pull_request_opened.json", true); w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+	if body := f.gh.bodies["POST /repos/acme/app/issues/7/comments"]; strings.Contains(body, "Billing") || !strings.Contains(body, "ARE1") {
+		t.Errorf("default posted comment: %s", body)
+	}
+	// On for a listed repository, in any case; blank entries are ignored.
+	f2 := newFixtureNames(t, []string{" ", "Acme/App"})
+	if !f2.a.namesShown("acme/app") || f2.a.namesShown("acme/other") || len(f2.a.names) != 1 {
+		t.Errorf("names: %v", f2.a.names)
+	}
+	if w := f2.deliver(t, "pull_request", "pull_request_opened.json", true); w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+	if body := f2.gh.bodies["POST /repos/acme/app/issues/7/comments"]; !strings.Contains(body, "ARE1 Billing") || !strings.Contains(body, "D7 Money in cents") {
+		t.Errorf("names posted comment: %s", body)
 	}
 }
