@@ -54,6 +54,10 @@ type Config struct {
 	// CheckURL, when set, builds the status's target link from a Check
 	// address, for example https://example.com/checks/%s.
 	CheckURL string
+	// ItemURL, when set, links every other address in the comment (Areas,
+	// Decisions) to the instance, where the reader's own read rules apply,
+	// for example https://example.com/items/%s.
+	ItemURL string
 	// NamesShown lists the repositories (owner/name) whose comment shows Area
 	// names and Decision titles (D152). Every other repository's comment
 	// shows addresses and states only: anyone who can read the pull request

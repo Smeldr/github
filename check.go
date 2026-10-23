@@ -80,67 +80,7 @@ func (a *Adapter) post(ctx context.Context, installation int64, repo string, num
 	// A pull request that touches nothing covered passes silently: no
 	// comment (walk-through answer 8b). One written for an earlier commit
 	// is updated, so it never shows a stale verdict.
-	return a.comment(ctx, installation, repo, number, commentBody(res, a.namesShown(repo)), res.Covered && res.Check != nil)
-}
-
-// statusOf maps a Check to a commit status: pending while it awaits
-// approval, failure when not approved, success otherwise. The description
-// holds the Check address and a state, never a name or title (D152).
-func statusOf(res smeldr.ChangeCheckResult) (state, description string) {
-	if !res.Covered || res.Check == nil {
-		return "success", "No Area covers these files"
-	}
-	c := res.Check
-	switch string(c.Status) {
-	case smeldr.ChangeCheckApproved:
-		return "success", c.Address + ": approved"
-	case smeldr.ChangeCheckNotApproved:
-		return "failure", c.Address + ": not approved"
-	case smeldr.ChangeCheckAwaitingApproval, smeldr.ChangeCheckChecking:
-		return "pending", c.Address + ": awaiting approval"
-	default:
-		return "success", c.Address + ": " + string(c.Status)
-	}
-}
-
-// commentBody is the host's copy of the Check, never stored by core. It
-// shows addresses and states; Area names and Decision titles only when names
-// is true (D152): instance records follow the instance's read rules, and
-// the comment is read by anyone who can read the pull request.
-func commentBody(res smeldr.ChangeCheckResult, names bool) string {
-	var b strings.Builder
-	b.WriteString(commentMarker + "\n")
-	if !res.Covered || res.Check == nil {
-		b.WriteString("**Smeldr check:** the latest commit touches nothing an Area covers.\n")
-		return b.String()
-	}
-	c := res.Check
-	fmt.Fprintf(&b, "**Smeldr check %s:** %s (%d of %d files checked", c.Address, c.Status, c.FilesChecked, c.FilesTotal)
-	if c.CheckedPartly {
-		b.WriteString(", checked partly")
-	}
-	b.WriteString(")\n\n")
-	if len(res.Areas) > 0 {
-		b.WriteString("| Area | Mode | Verdict |\n|---|---|---|\n")
-		for _, area := range res.Areas {
-			label := area.Address
-			if names && area.Name != "" {
-				label += " " + area.Name
-			}
-			fmt.Fprintf(&b, "| %s | %s | %s |\n", label, area.ApprovalMode, area.Verdict)
-		}
-	}
-	if len(res.Decisions) > 0 {
-		b.WriteString("\nDecisions in force:\n")
-		for _, d := range res.Decisions {
-			if names && d.Title != "" {
-				fmt.Fprintf(&b, "- %s %s\n", d.Address, d.Title)
-			} else {
-				fmt.Fprintf(&b, "- %s\n", d.Address)
-			}
-		}
-	}
-	return b.String()
+	return a.comment(ctx, installation, repo, number, a.view(repo).comment(res), res.Covered && res.Check != nil)
 }
 
 // comment updates the adapter's own comment on the pull request; when it has

@@ -262,7 +262,7 @@ func TestPullRequestOpened(t *testing.T) {
 		t.Errorf("status = %s", status)
 	}
 	comment := f.gh.bodies["POST /repos/acme/app/issues/7/comments"]
-	for _, want := range []string{"CHK3", "| ARE1 |", "- D7", "awaiting-approval"} {
+	for _, want := range []string{"Smeldr check CHK3: waiting for approval", "| ARE1 | needs approval | waiting for approval |", "Decisions that apply: D7", "Open CHK3 in Smeldr: https://example.com/checks/CHK3"} {
 		if !strings.Contains(comment, want) {
 			t.Errorf("comment is missing %q: %s", want, comment)
 		}
@@ -446,15 +446,16 @@ func TestStatusAndComment(t *testing.T) {
 		}
 	}
 	none := smeldr.ChangeCheckResult{Covered: false}
-	if state, desc := statusOf(none); state != "success" || !strings.Contains(desc, "No Area") {
+	if state, desc := statusOf(none); state != "success" || desc != "nothing covered" {
 		t.Errorf("uncovered: %s %s", state, desc)
 	}
-	if body := commentBody(none, false); !strings.Contains(body, "touches nothing") {
+	if body := (view{}).comment(none); body != commentMarker+"\nThe latest commit touches nothing that Smeldr covers, so there is nothing to approve.\n" {
 		t.Errorf("uncovered comment: %s", body)
 	}
 	partly := awaiting()
 	partly.Check.CheckedPartly = true
-	if body := commentBody(partly, false); !strings.Contains(body, "checked partly") {
+	partly.Check.FilesChecked, partly.Check.FilesTotal = 3000, 4312
+	if body := (view{}).comment(partly); !strings.Contains(body, "Smeldr checked the first 3,000 of 4,312 files.") {
 		t.Errorf("partly: %s", body)
 	}
 }
@@ -539,21 +540,21 @@ func TestInstallationLookup(t *testing.T) {
 // repository in Config.NamesShown.
 func TestCommentNames(t *testing.T) {
 	res := awaiting()
-	body := commentBody(res, false)
+	body := (view{}).comment(res)
 	for _, hidden := range []string{"Billing", "Money in cents"} {
 		if strings.Contains(body, hidden) {
 			t.Errorf("default comment shows %q: %s", hidden, body)
 		}
 	}
-	for _, shown := range []string{"CHK3", "ARE1", "requires-approval", "awaiting-approval", "- D7"} {
+	for _, shown := range []string{"CHK3", "| ARE1 |", "needs approval", "waiting for approval", "Decisions that apply: D7"} {
 		if !strings.Contains(body, shown) {
 			t.Errorf("default comment lacks %q: %s", shown, body)
 		}
 	}
-	if body := commentBody(res, true); !strings.Contains(body, "ARE1 Billing") || !strings.Contains(body, "D7 Money in cents") {
+	if body := (view{names: true}).comment(res); !strings.Contains(body, "ARE1 Billing") || !strings.Contains(body, "D7 Money in cents") {
 		t.Errorf("names on: %s", body)
 	}
-	if state, desc := statusOf(res); state != "pending" || desc != "CHK3: awaiting approval" {
+	if state, desc := statusOf(res); state != "pending" || desc != "CHK3: waiting for approval" {
 		t.Errorf("status: %s %q", state, desc)
 	}
 
@@ -575,5 +576,75 @@ func TestCommentNames(t *testing.T) {
 	}
 	if body := f2.gh.bodies["POST /repos/acme/app/issues/7/comments"]; !strings.Contains(body, "ARE1 Billing") || !strings.Contains(body, "D7 Money in cents") {
 		t.Errorf("names posted comment: %s", body)
+	}
+}
+
+// T921: every sentence and phrase comes from brand's approved wording.
+func TestWording(t *testing.T) {
+	area := func(addr, mode, verdict string) smeldr.ChangeCheckArea {
+		return smeldr.ChangeCheckArea{Address: addr, ApprovalMode: mode, Verdict: verdict}
+	}
+	check := func(status string, areas ...smeldr.ChangeCheckArea) smeldr.ChangeCheckResult {
+		res := awaiting()
+		res.Check.Status = smeldr.Status(status)
+		res.Areas = areas
+		return res
+	}
+	for _, tc := range []struct {
+		name         string
+		res          smeldr.ChangeCheckResult
+		want         []string
+		state, descr string
+	}{
+		{"checking", check(smeldr.ChangeCheckChecking), []string{"**Smeldr check CHK3: checking**", "Smeldr is checking this change."}, "pending", "CHK3: checking"},
+		{"comment only", check(smeldr.ChangeCheckCommented, area("ARE1", smeldr.ApprovalModeCommentOnly, smeldr.AreaVerdictCommented)),
+			[]string{"CHK3: nothing blocks the merge**", "This change touches only areas that do not need approval. Nothing blocks the merge.", "| ARE1 | comment only | no approval needed |"}, "success", "CHK3: nothing blocks the merge"},
+		{"audit after merge", check(smeldr.ChangeCheckCommented, area("ARE1", smeldr.ApprovalModeCommentOnly, smeldr.AreaVerdictCommented), area("ARE4", smeldr.ApprovalModeAuditAfterMerge, smeldr.AreaVerdictAwaitingAudit)),
+			[]string{"This change touches an area where approval comes after the merge. Nothing blocks the merge.", "| ARE4 | approval after merge | approval after merge |"}, "success", "CHK3: nothing blocks the merge"},
+		{"waiting, several", check(smeldr.ChangeCheckAwaitingApproval, area("ARE2", smeldr.ApprovalModeRequiresApproval, smeldr.AreaVerdictAwaiting), area("ARE3", smeldr.ApprovalModeRequiresApproval, smeldr.AreaVerdictApproved)),
+			[]string{"This change touches 2 areas that need approval before it can be merged. Each area answers on its own.", "| ARE2 | needs approval | waiting for approval |", "| ARE3 | needs approval | approved |"}, "pending", "CHK3: waiting for approval"},
+		{"approved", check(smeldr.ChangeCheckApproved, area("ARE2", smeldr.ApprovalModeRequiresApproval, smeldr.AreaVerdictApproved)),
+			[]string{"CHK3: approved**", "Every area that needs approval has approved this commit."}, "success", "CHK3: approved"},
+		{"not approved", check(smeldr.ChangeCheckNotApproved, area("ARE2", smeldr.ApprovalModeRequiresApproval, smeldr.AreaVerdictApproved), area("ARE3", smeldr.ApprovalModeRequiresApproval, smeldr.AreaVerdictNotApproved)),
+			[]string{"CHK3: not approved**", "ARE3 did not approve this commit. The reason is on the instance.", "| ARE3 | needs approval | not approved |"}, "failure", "CHK3: not approved"},
+		{"a state the tables do not know", check("frozen", area("ARE9", "strict", "pondering")), []string{"CHK3: frozen**", "| ARE9 | strict | pondering |"}, "success", "CHK3: frozen"},
+	} {
+		body := (view{}).comment(tc.res)
+		for _, w := range tc.want {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s: missing %q in\n%s", tc.name, w, body)
+			}
+		}
+		if state, descr := statusOf(tc.res); state != tc.state || descr != tc.descr {
+			t.Errorf("%s: status %s %q", tc.name, state, descr)
+		}
+	}
+
+	// Links, and more than ten Decisions.
+	res := awaiting()
+	res.Decisions = nil
+	for i := 1; i <= 24; i++ {
+		res.Decisions = append(res.Decisions, smeldr.AppliedDecision{Address: fmt.Sprintf("D%d", i)})
+	}
+	v := view{checkURL: "https://x/c/%s", itemURL: "https://x/i/%s"}
+	body := v.comment(res)
+	for _, w := range []string{"| [ARE1](https://x/i/ARE1) |", "[D10](https://x/i/D10), [and 14 more](https://x/c/CHK3)", "Open CHK3 in Smeldr: https://x/c/CHK3"} {
+		if !strings.Contains(body, w) {
+			t.Errorf("links: missing %q in\n%s", w, body)
+		}
+	}
+	if strings.Contains(body, "D11") {
+		t.Errorf("more than ten Decisions listed:\n%s", body)
+	}
+	if strings.Contains((view{}).comment(res), "](") {
+		t.Error("a link without ItemURL or CheckURL")
+	}
+	if got := strings.Contains((view{}).comment(res), "and 14 more"); !got {
+		t.Error("and 14 more, unlinked")
+	}
+	for n, want := range map[int]string{0: "0", 999: "999", 1000: "1,000", 4312: "4,312", 1234567: "1,234,567"} {
+		if got := thousands(n); got != want {
+			t.Errorf("thousands(%d) = %s", n, got)
+		}
 	}
 }
