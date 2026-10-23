@@ -68,6 +68,8 @@ type fakeGitHub struct {
 	files    int
 	comments []map[string]any
 	fail     string // a path prefix that answers 500
+	// installation is what GET /repos/{repo}/installation answers.
+	installation int64
 }
 
 func (g *fakeGitHub) handler(t *testing.T, pub *rsa.PublicKey) http.Handler {
@@ -105,6 +107,9 @@ func (g *fakeGitHub) handler(t *testing.T, pub *rsa.PublicKey) http.Handler {
 			_ = json.NewEncoder(w).Encode(files)
 		case strings.HasSuffix(r.URL.Path, "/comments") && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode(g.comments)
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			verifyJWT(t, pub, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": g.installation})
 		default:
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte("{}"))
@@ -257,7 +262,11 @@ func TestPullRequestOpened(t *testing.T) {
 		}
 	}
 	// A second event reuses the cached token and updates the comment in place.
-	f.gh.comments = []map[string]any{{"id": 55, "body": commentMarker + "\nold"}}
+	f.gh.comments = []map[string]any{
+		// A comment by someone else that plants the marker is left alone.
+		{"id": 54, "body": commentMarker + "\nplanted", "user": map[string]any{"type": "User"}},
+		{"id": 55, "body": commentMarker + "\nold", "user": map[string]any{"type": "Bot"}, "performed_via_github_app": map[string]any{"id": 123}},
+	}
 	f.core.result.Check.Status = smeldr.ChangeCheckApproved
 	if w := f.deliver(t, "pull_request", "pull_request_opened.json", true); w.Code != http.StatusNoContent {
 		t.Fatalf("second: %d", w.Code)
@@ -267,6 +276,9 @@ func TestPullRequestOpened(t *testing.T) {
 	}
 	if !f.gh.called("PATCH /repos/acme/app/issues/comments/55") {
 		t.Errorf("comment not updated in place: %v", f.gh.calls)
+	}
+	if f.gh.called("PATCH /repos/acme/app/issues/comments/54") {
+		t.Error("a planted marker comment was edited")
 	}
 	if !strings.Contains(f.gh.bodies["POST /repos/acme/app/statuses/"+head], `"state":"success"`) {
 		t.Error("approved is not success")
@@ -364,11 +376,14 @@ func (f fixture) coreEvent(t *testing.T, body string, ts time.Time, secret []byt
 func TestCoreEvents(t *testing.T) {
 	f := newFixture(t)
 	event := `{"id":"e1","event":"changecheck.transitioned","data":{"type":"changecheck","id":"c1","to_state":"approved"}}`
-	// Before any webhook the installation is unknown.
-	if code := f.coreEvent(t, event, time.Now(), f.coreSec); code != http.StatusBadGateway {
-		t.Errorf("unknown installation: %d", code)
+	// Before any webhook (after a restart) the installation is looked up.
+	f.gh.installation = 9001
+	if code := f.coreEvent(t, event, time.Now(), f.coreSec); code != http.StatusNoContent || !f.gh.called("GET /repos/acme/app/installation") {
+		t.Errorf("installation looked up: %d, %v", code, f.gh.calls)
 	}
-	f.deliver(t, "pull_request", "pull_request_opened.json", true)
+	if id, ok := f.a.installation("acme/app"); !ok || id != 9001 {
+		t.Errorf("installation remembered: %d %v", id, ok)
+	}
 	f.core.result.Check.Status = smeldr.ChangeCheckNotApproved
 	if code := f.coreEvent(t, event, time.Now(), f.coreSec); code != http.StatusNoContent {
 		t.Fatalf("event: %d", code)
@@ -428,7 +443,7 @@ func TestStatusAndComment(t *testing.T) {
 	if state, desc := statusOf(none); state != "success" || !strings.Contains(desc, "No Area") {
 		t.Errorf("uncovered: %s %s", state, desc)
 	}
-	if body := commentBody(none); !strings.Contains(body, "no Area covers") {
+	if body := commentBody(none); !strings.Contains(body, "touches nothing") {
 		t.Errorf("uncovered comment: %s", body)
 	}
 	partly := awaiting()
@@ -476,5 +491,40 @@ func TestTransportFailures(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("unreadable body: %d", w.Code)
 		}
+	}
+}
+
+// S3158 fix 1: a pull request that touches nothing covered passes silently.
+func TestUncoveredPullRequest(t *testing.T) {
+	f := newFixture(t)
+	f.core.result = smeldr.ChangeCheckResult{Covered: false}
+	if w := f.deliver(t, "pull_request", "pull_request_opened.json", true); w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+	if !strings.Contains(f.gh.bodies["POST /repos/acme/app/statuses/"+head], `"state":"success"`) {
+		t.Error("no success status")
+	}
+	if f.gh.called("POST /repos/acme/app/issues/7/comments") {
+		t.Error("an uncovered pull request got a comment")
+	}
+	// An earlier covered commit left a comment: it is updated, not left stale.
+	f.gh.comments = []map[string]any{{"id": 56, "body": commentMarker + "\nCHK3 awaiting", "user": map[string]any{"type": "Bot"}, "performed_via_github_app": map[string]any{"id": 123}}}
+	if w := f.deliver(t, "pull_request", "pull_request_opened.json", true); w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+	if body := f.gh.bodies["PATCH /repos/acme/app/issues/comments/56"]; !strings.Contains(body, "touches nothing") {
+		t.Errorf("stale comment not updated: %q", body)
+	}
+}
+
+// S3158 fix 3: the installation lookup fails or finds none.
+func TestInstallationLookup(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.a.installationOf(context.Background(), "acme/app"); err == nil {
+		t.Error("no installation: no error")
+	}
+	f.gh.fail = "/repos/acme/app/installation"
+	if _, err := f.a.installationOf(context.Background(), "acme/app"); err == nil {
+		t.Error("lookup error: no error")
 	}
 }

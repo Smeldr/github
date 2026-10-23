@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	smeldr "smeldr.dev/core"
@@ -59,9 +60,9 @@ func (a *Adapter) Refresh(ctx context.Context, check string) error {
 	if c == nil || string(c.Status) == smeldr.ChangeCheckSuperseded {
 		return nil
 	}
-	installation, ok := a.installation(c.Repository)
-	if !ok {
-		return fmt.Errorf("no installation known for %s yet: it is learnt from the repository's webhooks", c.Repository)
+	installation, err := a.installationOf(ctx, c.Repository)
+	if err != nil {
+		return err
 	}
 	return a.post(ctx, installation, c.Repository, c.Number, c.HeadCommit, res)
 }
@@ -76,7 +77,10 @@ func (a *Adapter) post(ctx context.Context, installation int64, repo string, num
 	if err := a.api(ctx, installation, http.MethodPost, fmt.Sprintf("/repos/%s/statuses/%s", repo, head), status, nil); err != nil {
 		return err
 	}
-	return a.comment(ctx, installation, repo, number, commentBody(res))
+	// A pull request that touches nothing covered passes silently: no
+	// comment (walk-through answer 8b). One written for an earlier commit
+	// is updated, so it never shows a stale verdict.
+	return a.comment(ctx, installation, repo, number, commentBody(res), res.Covered && res.Check != nil)
 }
 
 // statusOf maps a Check to a commit status: pending while it awaits
@@ -103,7 +107,7 @@ func commentBody(res smeldr.ChangeCheckResult) string {
 	var b strings.Builder
 	b.WriteString(commentMarker + "\n")
 	if !res.Covered || res.Check == nil {
-		b.WriteString("**Smeldr check:** no Area covers the files of this pull request.\n")
+		b.WriteString("**Smeldr check:** the latest commit touches nothing an Area covers.\n")
 		return b.String()
 	}
 	c := res.Check
@@ -127,24 +131,37 @@ func commentBody(res smeldr.ChangeCheckResult) string {
 	return b.String()
 }
 
-// comment updates the adapter's comment on the pull request, or writes it.
-func (a *Adapter) comment(ctx context.Context, installation int64, repo string, number int, body string) error {
+// comment updates the adapter's own comment on the pull request; when it has
+// none, it writes one only if create is true.
+func (a *Adapter) comment(ctx context.Context, installation int64, repo string, number int, body string, create bool) error {
 	for page := 1; page <= 10; page++ {
 		var comments []struct {
 			ID   int64  `json:"id"`
 			Body string `json:"body"`
+			User struct {
+				Type string `json:"type"`
+			} `json:"user"`
+			App *struct {
+				ID int64 `json:"id"`
+			} `json:"performed_via_github_app"`
 		}
 		if err := a.api(ctx, installation, http.MethodGet, fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=100&page=%d", repo, number, page), nil, &comments); err != nil {
 			return err
 		}
 		for _, c := range comments {
-			if strings.HasPrefix(c.Body, commentMarker) {
+			// Only the App's own comment: anyone who can comment could plant
+			// the marker (S3158 fix 2).
+			own := c.User.Type == "Bot" && c.App != nil && strconv.FormatInt(c.App.ID, 10) == a.cfg.AppID
+			if own && strings.HasPrefix(c.Body, commentMarker) {
 				return a.api(ctx, installation, http.MethodPatch, fmt.Sprintf("/repos/%s/issues/comments/%d", repo, c.ID), map[string]any{"body": body}, nil)
 			}
 		}
 		if len(comments) < 100 {
 			break
 		}
+	}
+	if !create {
+		return nil
 	}
 	return a.api(ctx, installation, http.MethodPost, fmt.Sprintf("/repos/%s/issues/%d/comments", repo, number), map[string]any{"body": body}, nil)
 }

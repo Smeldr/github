@@ -108,6 +108,30 @@ func (a *Adapter) api(ctx context.Context, installation int64, method, path stri
 	return a.call(ctx, "token "+tok, method, path, in, out)
 }
 
+// installationOf returns the App's installation on repo: the one learnt from
+// its webhooks, or else looked up with the App JWT (after a restart) and
+// remembered.
+func (a *Adapter) installationOf(ctx context.Context, repo string) (int64, error) {
+	if id, ok := a.installation(repo); ok {
+		return id, nil
+	}
+	jwt, err := a.appJWT()
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	if err := a.call(ctx, "Bearer "+jwt, http.MethodGet, fmt.Sprintf("/repos/%s/installation", repo), nil, &out); err != nil {
+		return 0, fmt.Errorf("the App's installation on %s: %w", repo, err)
+	}
+	if out.ID == 0 {
+		return 0, fmt.Errorf("the App has no installation on %s", repo)
+	}
+	a.remember(repo, out.ID)
+	return out.ID, nil
+}
+
 // changedFiles lists a pull request's files, a page of 100 at a time, up to
 // the 3000 GitHub lists.
 func (a *Adapter) changedFiles(ctx context.Context, installation int64, repo string, number int) ([]string, error) {
