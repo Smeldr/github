@@ -2,6 +2,12 @@
 
 The GitHub adapter of Smeldr's pull request check (core T918). It turns a GitHub App's `pull_request` webhooks into core's `CheckChange` and `RecordMerge`, and posts each Check's verdict back as a commit status (`smeldr/check`) and one comment it updates in place.
 
+**Self-hosting without Go:** the example server (`smeldr.dev/core/example/server`) mounts this adapter when `ENABLE_GITHUB` is set, configured by environment variables only (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_FILE`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_ADAPTER_TOKEN_ID`), and registers the core webhook itself. See core's `docs/REFERENCE.md`. The rest of this page is for mounting it in your own Go server.
+
+```sh
+go get smeldr.dev/github@v0.1.0
+```
+
 ```go
 adapter, err := github.New(github.Config{
     Checker:           app,                                  // *smeldr.App

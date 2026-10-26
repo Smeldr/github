@@ -1,5 +1,3 @@
-// AGPL-3.0-or-later
-
 // Package github is the GitHub adapter of Smeldr's pull request check
 // (smeldr.dev/core T918, D142 point 8, D143, D144).
 //
