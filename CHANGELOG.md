@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-26
+
+### Fixed
+
+- The README named the wrong permission: a comment on a pull request needs **Pull requests: read and write**, not read (found live in core T945: with read, posting the comment answered 403). It also says that an installation must accept a widened permission before it applies.
+- A call GitHub refuses now returns GitHub's own `message` in the error, on one line and at most 300 characters (for example `403 Forbidden: Resource not accessible by integration`), instead of the status alone. Nothing from the request goes into the error (core T950).
+
 ## [0.1.0] - 2026-10-26
 
 First published version (core T940). Requires smeldr.dev/core v1.174.0 or later; the example server mounts it with `ENABLE_GITHUB` and environment variables only.

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -87,7 +88,10 @@ func (a *Adapter) call(ctx context.Context, auth, method, path string, in, out a
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		if msg := gitHubErrorMessage(raw); msg != "" {
+			return fmt.Errorf("github: %s %s: %s: %s", method, path, resp.Status, msg)
+		}
 		return fmt.Errorf("github: %s %s: %s", method, path, resp.Status)
 	}
 	if out == nil {
@@ -95,6 +99,28 @@ func (a *Adapter) call(ctx context.Context, auth, method, path string, in, out a
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// maxErrorMessage bounds the GitHub error message an error carries.
+const maxErrorMessage = 300
+
+// gitHubErrorMessage returns the message field of a GitHub error body, on one
+// line and at most maxErrorMessage characters, or "" when the body is not
+// JSON or has none. Only that field is taken: GitHub's error bodies describe
+// the failure (a permission, a validation, not found) and never echo the
+// request's headers or token (core T950).
+func gitHubErrorMessage(body []byte) string {
+	var e struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &e) != nil {
+		return ""
+	}
+	msg := strings.Join(strings.Fields(e.Message), " ")
+	if r := []rune(msg); len(r) > maxErrorMessage {
+		msg = string(r[:maxErrorMessage]) + "..."
+	}
+	return msg
 }
 
 // api calls GitHub as the installation.
