@@ -41,7 +41,8 @@ type pullRequestEvent struct {
 // ServeHTTP is the GitHub App's webhook endpoint. A request whose
 // X-Hub-Signature-256 does not verify is 401 and nothing is called. A
 // pull_request opened, synchronized, reopened or made ready is checked; one
-// closed as merged is recorded as a merge. Other events are 204. A failure
+// closed as merged is recorded as a merge, and one closed without a merge is
+// recorded as closed when the Checker can record it. Other events are 204. A failure
 // in core or at GitHub is 502, so GitHub shows the delivery as failed and it
 // can be redelivered (core's check is idempotent).
 func (a *Adapter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +75,8 @@ func (a *Adapter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		err = a.checkPullRequest(ctx, ev)
 	case ev.Action == "closed" && ev.PullRequest.Merged:
 		err = a.recordMerge(ctx, ev)
+	case ev.Action == "closed":
+		err = a.recordClose(ctx, ev)
 	default:
 		w.WriteHeader(http.StatusNoContent)
 		return

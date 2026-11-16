@@ -5,7 +5,9 @@
 // http.Handler for a GitHub App's webhook: a pull_request opened,
 // synchronized, reopened or made ready lists the changed files (up to the
 // 3,000 GitHub lists) and calls core's CheckChange; a pull_request closed as
-// merged calls RecordMerge. It posts the verdict as a commit status
+// merged calls RecordMerge; one closed without a merge calls RecordClose
+// when the Checker has it (*smeldr.App does), so core no longer
+// reopens its Check. It posts the verdict as a commit status
 // (pending while approval is awaited, success when approved or only
 // commented, failure when not approved) and as one comment it keeps up to
 // date: that comment is GitHub's copy, never stored by core.

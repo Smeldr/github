@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A pull request closed without a merge is reported to core (core T1294).** The webhook now calls `RecordClose` for a `pull_request` closed with `merged: false`, with the repository, the number and the head commit. Core then no longer reopens that pull request's Check when the Decisions for its Areas change, and withdraws the Check's open approval requests. A failure in core is 502, so GitHub can redeliver; `RecordClose` is idempotent. `Checker` is not widened: the adapter calls `RecordClose` only when the configured Checker has it (`*smeldr.App` from core v1.194.0). With a Checker without it (an own implementation, or a wrapper around the App that does not pass it on), the event is 204 and nothing is called, as before: closed pull requests are not reported, and their Checks can still be reopened.
+- go.mod requires smeldr.dev/core v1.194.0 (was v1.174.0).
+
 ---
 
 ## [0.1.2] - 2026-11-13

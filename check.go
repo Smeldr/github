@@ -45,6 +45,30 @@ func (a *Adapter) recordMerge(ctx context.Context, ev pullRequestEvent) error {
 	return nil
 }
 
+// closeRecorder is the optional part of a [Checker] that records a pull
+// request closed without a merge. *smeldr.App implements it. [Checker] is
+// not widened: with a Checker without it, the close is not reported.
+type closeRecorder interface {
+	RecordClose(ctx context.Context, in smeldr.CloseInput) (smeldr.CloseResult, error)
+}
+
+// recordClose records that the pull request was closed without a merge, so
+// core no longer reopens its Check. A Checker that cannot record it is left
+// alone.
+func (a *Adapter) recordClose(_ context.Context, ev pullRequestEvent) error {
+	rec, ok := a.cfg.Checker.(closeRecorder)
+	if !ok {
+		return nil
+	}
+	_, err := rec.RecordClose(a.coreCtx(), smeldr.CloseInput{
+		Repository: ev.Repository.FullName, Number: ev.Number, HeadCommit: ev.PullRequest.Head.SHA,
+	})
+	if err != nil {
+		return fmt.Errorf("record the close of %s#%d: %w", ev.Repository.FullName, ev.Number, err)
+	}
+	return nil
+}
+
 // Refresh posts a Check's current verdict to its pull request: the status
 // on its head commit and the comment. It needs the repository's
 // installation, learnt from an earlier webhook; a superseded Check posts

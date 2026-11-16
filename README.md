@@ -25,6 +25,7 @@ mux.Handle("POST /github/core-events", adapter.CoreEvents()) // a core webhook f
 |---|---|---|
 | `pull_request` opened, synchronize, reopened, ready_for_review | `CheckChange` with the changed files (up to 3,000) | status: `pending` (checking, waiting for approval), `success` (approved, nothing blocks the merge, nothing covered), `failure` (not approved); one comment |
 | `pull_request` closed and merged | `RecordMerge` | nothing (an audit opens in Smeldr) |
+| `pull_request` closed without a merge | `RecordClose`, when the Checker has it (`*smeldr.App` does; a Checker without it is not called) | nothing (the Check is no longer reopened, and its open approval requests are withdrawn) |
 | core `changecheck.transitioned` | `ChangeCheckOf` | the new status and comment |
 
 A webhook that does not verify is 401 and calls nothing. A failure in core or at GitHub is 502, so GitHub marks the delivery failed and it can be redelivered: core's check is idempotent. The App needs these repository permissions: **Pull requests: read and write** (a comment on a pull request needs write, although it is posted through the issues comments endpoint), Commit statuses: read and write, Issues: read and write, and Metadata: read. When you widen an App's permissions, each installation must accept the change in its own settings before it applies; until then GitHub answers 403. A failed call's error carries GitHub's own message (for example `403 Forbidden: Resource not accessible by integration`) and nothing from the request. No secret is stored or logged.

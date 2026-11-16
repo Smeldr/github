@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -326,6 +327,69 @@ func TestPullRequestMergedAndOthers(t *testing.T) {
 	f.a.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/hook", nil))
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET: %d", w.Code)
+	}
+}
+
+// The core App records closes, so the adapter reports them to it.
+var _ closeRecorder = (*smeldr.App)(nil)
+
+// closingChecker is a fakeChecker that can also record a close.
+type closingChecker struct {
+	*fakeChecker
+	closed   []smeldr.CloseInput
+	closeErr error
+}
+
+func (c *closingChecker) RecordClose(_ context.Context, in smeldr.CloseInput) (smeldr.CloseResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = append(c.closed, in)
+	return smeldr.CloseResult{Covered: true}, c.closeErr
+}
+
+func TestPullRequestClosedWithoutMerge(t *testing.T) {
+	// A Checker that records closes gets the repository, number and head.
+	f := newFixture(t)
+	closer := &closingChecker{fakeChecker: f.core}
+	f.a.cfg.Checker = closer
+	if w := f.deliver(t, "pull_request", "pull_request_closed.json", true); w.Code != http.StatusNoContent || len(closer.closed) != 1 {
+		t.Fatalf("closed: %d, %v", w.Code, closer.closed)
+	}
+	if c := closer.closed[0]; c.Repository != "acme/app" || c.Number != 7 || c.HeadCommit != head {
+		t.Errorf("RecordClose input = %+v", c)
+	}
+	if len(f.core.merged) != 0 || len(f.core.checked) != 0 || len(f.gh.calls) != 0 {
+		t.Errorf("a close called more: merged %v, checked %v, GitHub %v", f.core.merged, f.core.checked, f.gh.calls)
+	}
+	// Closed and merged is still a merge, not a close.
+	if w := f.deliver(t, "pull_request", "pull_request_merged.json", true); w.Code != http.StatusNoContent || len(f.core.merged) != 1 || len(closer.closed) != 1 {
+		t.Errorf("merged: %d, merged %v, closed %v", w.Code, f.core.merged, closer.closed)
+	}
+	// An unsigned close calls nothing.
+	if w := f.deliver(t, "pull_request", "pull_request_closed.json", false); w.Code != http.StatusUnauthorized || len(closer.closed) != 1 {
+		t.Errorf("unsigned close: %d, %d closes", w.Code, len(closer.closed))
+	}
+	// A failing RecordClose is 502, so GitHub can redeliver.
+	closer.closeErr = errors.New("core down")
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	w := f.deliver(t, "pull_request", "pull_request_closed.json", true)
+	slog.SetDefault(prev)
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("close error: %d", w.Code)
+	}
+	if line := logged.String(); !strings.Contains(line, "record the close of acme/app#7") || !strings.Contains(line, "core down") {
+		t.Errorf("close error log = %q", line)
+	}
+
+	// A Checker without RecordClose: 204, and nothing is called.
+	g := newFixture(t)
+	if w := g.deliver(t, "pull_request", "pull_request_closed.json", true); w.Code != http.StatusNoContent {
+		t.Errorf("no RecordClose: %d", w.Code)
+	}
+	if len(g.core.merged) != 0 || len(g.core.checked) != 0 || len(g.gh.calls) != 0 {
+		t.Errorf("no RecordClose called more: merged %v, checked %v, GitHub %v", g.core.merged, g.core.checked, g.gh.calls)
 	}
 }
 

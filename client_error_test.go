@@ -14,8 +14,8 @@ func TestCall_ErrorMessage(t *testing.T) {
 	long := strings.Repeat("x", 1000)
 	for _, tc := range []struct {
 		name, ctype, body string
-		status           int
-		want, notWant    string
+		status            int
+		want, notWant     string
 	}{
 		{"permission", "application/json", `{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com"}`, 403,
 			"403 Forbidden: Resource not accessible by integration", "docs.github.com"},
